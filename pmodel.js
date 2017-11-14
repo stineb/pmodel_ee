@@ -162,7 +162,7 @@ function lue_approx( temp, vpd, elv, ca, gstar, ns_star, kmm ){
     chi : chi,
     m : m,
     n : -9999
-  }
+  };
 
   return out_lue;
 
@@ -200,7 +200,7 @@ function lue_vpd_c3_simpl( kmm, gstar, ns_star, ca, vpd ){
     chi : chi,
     m : m,
     n : n
-  }
+  };
  
   return out_lue;
 
@@ -245,7 +245,7 @@ function lue_vpd_c3_full( kmm, gstar, ns_star, ca, vpd ){
     chi : chi,
     m : m,
     n : n
-  }
+  };
 
   return out_lue;
 
@@ -264,7 +264,7 @@ function lue_c4(){
     chi : -9999,
     m : 1,
     n : 1
-  }
+  };
 
   return out_lue;
 
@@ -277,13 +277,13 @@ function calc_mprime( m ){
   // Output: mpi (unitless): modiefied m accounting for the co-limitation
   //                         hypothesis after Prentice et al. (2014)
   //-----------------------------------------------------------------------
-  var kc = 0.41          // Jmax cost coefficient
+  var kc = 0.41;          // Jmax cost coefficient
 
   // square of m-prime (mpi)
   var mprime = Math.pow( m, 2 ) - Math.pow( kc, 2.0/3.0) * Math.pow( m, 4.0/3.0);
 
   // Check for negatives and take root of square
-  if (mprime > 0) { var mprime = Math.sqrt(mprime); }
+  if (mprime > 0) { mprime = Math.sqrt(mprime); }
 
   return mprime;
   
@@ -432,7 +432,7 @@ function calc_patm( elv ){
   var kMa = 0.028963; // molecular weight of dry air, kg/mol (Tsilingiris, 2008)
 
   // Convert elevation to pressure, Pa:
-  var patm = kPo*(1.0 - kL*elv/kTo)**(kG*kMa/(kR*kL));
+  var patm = kPo*Math.pow((1.0 - kL*elv/kTo),(kG*kMa/(kR*kL)));
   
   return patm;
 
@@ -526,7 +526,7 @@ function calc_viscosity_h2o( tc, patm ){
 
   // Calculate mu0 (Eq. 11 & Table 2, Huber et al., 2009):
   var mu0 = 1.67752 + 2.20462/tbar + 0.6366564/tbar2 - 0.241605/tbar3;
-  var mu0 = 1e2*tbarx/mu0;
+  mu0 = 1e2*tbarx/mu0;
 
   // Create Table 3, Huber et al. (2009):
   var h_array = [
@@ -552,7 +552,7 @@ function calc_viscosity_h2o( tc, patm ){
     }
     mu1 += coef1 * coef2;
   }
-  var mu1 = Math.exp( rbar * mu1 );
+  mu1 = Math.exp( rbar * mu1 );
 
   // Calculate mu_bar (Eq. 2, Huber et al., 2009)
   //   assumes mu2 = 1
