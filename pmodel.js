@@ -1,55 +1,107 @@
-function pmodel( temp, vpd, co2, elv, ppfd, fapar, method ) {
+
+//-----------------------------------------------------------------------
+// Example values
+//-----------------------------------------------------------------------
+var co2   = 376.0
+var elv   = 450.0
+var mtemp = [0.4879904, 6.1999985, 7.4999870, 9.6999003, 13.1999913, 19.6999227, 18.6000030, 18.0999577, 13.8999807, 10.7000307, 7.2999217, 4.4999644]
+var mvpd  = [113.0432, 338.4469, 327.1185, 313.8799, 247.9747, 925.9489, 633.8551, 497.6772, 168.7784, 227.1889, 213.0142, 172.6035]
+var mppfd = [223.8286, 315.2295, 547.4822, 807.4035, 945.9020, 1194.1227, 1040.5228, 1058.4161, 814.2580, 408.5199, 268.9183, 191.4482]
+var fapar = 1.0
+
+//-----------------------------------------------------------------------
+// Define PFT-specific parameters. Here for C3 plants.
+//-----------------------------------------------------------------------
+var params_pft_gpp = {
+  kphio       : 0.0744,
+  beta        : 146.0,
+  rd_to_vcmax : 0.015
+}
+
+//-----------------------------------------------------------------------
+// PFT-independent parameters, therefore hard-wired.
+//-----------------------------------------------------------------------
+var kPo = 101325.0        // standard atmosphere, Pa (Allen, 1973)
+var kTo = 25.0            // base temperature, deg C (Prentice, unpublished)
+var temp0 = 0.0           // temperature below which all quantities are zero (deg C)
+var temp1 = 12.0          // temperature above which ramp function is 1.0 (linear between temp0 and temp1) (deg C)
+
+// Metabolic N ratio (N per unit Vcmax)
+// Reference: Harrison et al., 2009, Plant, Cell and Environment; Eq. 3
+var mol_weight_rubisco    = 5.5e5    // molecular weight of Rubisco, (g R)(mol R)-1
+var n_conc_rubisco        = 1.14e-2  // N concentration in rubisco, (mol N)(g R)-1
+var cat_turnover_per_site = 2.33     // catalytic turnover rate per site at 25 deg C, (mol CO2)(mol R sites)-1; use 2.33 instead of (3.5) as not all Rubisco is active (see Harrison et al., 2009)  
+var cat_sites_per_mol_R   = 8.0      // number of catalytic sites per mol R, (mol R sites)(mol R)-1
+
+// Metabolic N ratio (= 336.3734 mol N s (mol CO2)-1 )
+var n_v = mol_weight_rubisco * n_conc_rubisco / ( cat_turnover_per_site * cat_sites_per_mol_R )
+
+
+//-----------------------------------------------------------------------
+// Execute P-model with specified arguments
+//-----------------------------------------------------------------------
+var result = pmodel( mtemp[0], mvpd[0], co2, elv, mppfd[0], fapar, "C3_full" )
+
+
+//-----------------------------------------------------------------------
+// P-model
+//-----------------------------------------------------------------------
+function pmodel( tc, vpd, co2, elv, ppfd, fapar, method ) {
   
   // absorbed photosynthetically active radiation (mol/m2)
   var ppfdabs = fapar * ppfd;
-
+  
   // atmospheric pressure as a function of elevation (Pa)
   var patm = calc_patm( elv );
 
   // ambient CO2 partial pression (Pa)
   var ca = co2_to_ca( co2, patm );
-
+  
   // photorespiratory compensation point - Gamma-star (Pa)
   var gstar = calc_gstar( tc );
-
+  // print(gstar,'gstar')
+   
   // Michaelis-Menten coef. (Pa)
   var kmm  = calc_k( tc, patm );
+  // print(kmm,'kmm')
 
   // viscosity correction factor = viscosity( temp, press )/viscosity( 25 degC, 1013.25 Pa) 
   var ns      = calc_viscosity_h2o( tc, patm );  // Pa s 
   var ns25    = calc_viscosity_h2o( kTo, kPo );  // Pa s 
   var ns_star = ns / ns25;                       // (unitless)
+  // print(ns_star,'ns_star')
 
-  switch (method){
+  if (method=="approx"){
+    //-----------------------------------------------------------------------
+    // A. APPROXIMATIVE METHOD
+    //-----------------------------------------------------------------------
+    var out_lue = lue_approx( tc, vpd, elv, ca, gstar, ns, kmm );
+              
+  } else if (method=="C3_simpl"){
+    //-----------------------------------------------------------------------
+    // B.1 SIMPLIFIED FORMULATION 
+    //-----------------------------------------------------------------------
+    var out_lue = lue_vpd_c3_simpl( kmm, gstar, ns, ca, vpd );
 
-    case ("approx"):
-      //-----------------------------------------------------------------------
-      // A. APPROXIMATIVE METHOD
-      //-----------------------------------------------------------------------
-      out_lue = lue_approx( tc, vpd, elv, ca, gstar, ns, kmm );
-                
-    case ("C3_simpl"):
-      //-----------------------------------------------------------------------
-      // B.1 SIMPLIFIED FORMULATION 
-      //-----------------------------------------------------------------------
-      out_lue = lue_vpd_c3_simpl( kmm, gstar, ns, ca, vpd );
+ } else if (method=="C3_full"){
+    //-----------------------------------------------------------------------
+    // B.2 FULL FORMULATION
+    //-----------------------------------------------------------------------
+    var out_lue = lue_vpd_c3_full( kmm, gstar, ns_star, ca, vpd );
 
-    case ("C3_full"):
-      //-----------------------------------------------------------------------
-      // B.2 FULL FORMULATION
-      //-----------------------------------------------------------------------
-      out_lue = lue_vpd_c3_full( kmm, gstar, ns_star, ca, vpd );
-
-    case ("C4"):
-      //-----------------------------------------------------------------------
-      // B.2 FULL FORMULATION
-      //-----------------------------------------------------------------------
-      out_lue = lue_c4();
+  } else if (method=="C4"){
+    //-----------------------------------------------------------------------
+    // B.2 FULL FORMULATION
+    //-----------------------------------------------------------------------
+    var out_lue = lue_c4();
 
   }
 
   // LUE-functions return m, n, and chi
   var chi = out_lue.chi;
+
+  // print('m', out_lue.m )
+  // print('chi', out_lue.chi )
 
   //-----------------------------------------------------------------------
   // Calculate function return variables
@@ -60,49 +112,58 @@ function pmodel( temp, vpd, co2, elv, ppfd, fapar, method ) {
   var mprime = calc_mprime( out_lue.m );
 
   // Light use efficiency (assimilation rate per unit absorbed light)
-  var lue = params_pft_gpp(pft).kphio * mprime ; // in mol CO2 m-2 s-1 / (mol light m-2 s-1)
+  var lue = params_pft_gpp.kphio * mprime ; // in mol CO2 m-2 s-1 / (mol light m-2 s-1)
+  // print( 'lue', lue )
 
   // Gross primary productivity = ecosystem-level assimilation rate (per unit ground area)
   var assim = ppfdabs * lue; // in mol CO2 m-2 s-1
-
+  
   // Leaf-level assimilation rate (per unit leaf area), representative for top-canopy leaves
   var assim_unitfapar = ppfd * lue;  // in mol m-2 s-1
 
   // leaf-internal CO2 partial pressure (Pa)
   var ci = chi * ca;
+  // print( 'ci', ci )
 
   // stomatal conductance to H2O, expressed per unit absorbed light
   var gs_unitiabs = 1.6 * lue * patm / ( ca - ci );
 
   // Vcmax per unit ground area is the product of the intrinsic quantum 
   // efficiency, the absorbed PAR, and 'n'
-  var vcmax = ppfdabs * params_pft_gpp(pft).kphio * out_lue.n;
+  var vcmax = ppfdabs * params_pft_gpp.kphio * out_lue.n;
+  // print( 'ppfdabs', ppfdabs )
+  // print( 'params_pft_gpp.kphio', params_pft_gpp.kphio )
+  // print( 'out_lue.n', out_lue.n )
+  // print( 'vcmax', vcmax )
 
   // Vcmax normalised per unit fAPAR (assuming fAPAR=1)
-  var vcmax_unitfapar = ppfd * params_pft_gpp(pft).kphio * out_lue.n;
+  var vcmax_unitfapar = ppfd * params_pft_gpp.kphio * out_lue.n;
 
   // Vcmax normalised per unit absorbed PPFD (assuming ppfdabs=1)
-  var vcmax_unitiabs = params_pft_gpp(pft).kphio * out_lue.n; 
+  var vcmax_unitiabs = params_pft_gpp.kphio * out_lue.n; 
 
   // Vcmax25 (vcmax normalized to 25 deg C)
   var factor25_vcmax    = calc_vcmax25( 1.0, tc );
   var vcmax25           = factor25_vcmax * vcmax;
   var vcmax25_unitfapar = factor25_vcmax * vcmax_unitfapar;
   var vcmax25_unitiabs  = factor25_vcmax * vcmax_unitiabs;
+  // print( 'vcmax25', vcmax25 )
 
   // Dark respiration
-  var rd = params_pft_gpp(pft).rd_to_vcmax * vcmax;
+  var rd = params_pft_gpp.rd_to_vcmax * vcmax;
+  // print( 'rd', rd )
 
   // Dark respiration per unit fAPAR (assuming fAPAR=1)
-  var rd_unitfapar = params_pft_gpp(pft).rd_to_vcmax * vcmax_unitfapar;
+  var rd_unitfapar = params_pft_gpp.rd_to_vcmax * vcmax_unitfapar;
 
   // Dark respiration per unit absorbed PPFD (assuming ppfdabs=1)
-  var rd_unitiabs = params_pft_gpp(pft).rd_to_vcmax * vcmax_unitiabs;
+  var rd_unitiabs = params_pft_gpp.rd_to_vcmax * vcmax_unitiabs;
 
   // active metabolic leaf N (canopy-level), mol N/m2-ground (same equations as for nitrogen content per unit leaf area, gN/m2-leaf)
   var actnv = vcmax25 * n_v;
   var actnv_unitfapar = vcmax25_unitfapar * n_v;
   var actnv_unitiabs  = vcmax25_unitiabs  * n_v;
+  // print( 'actnv', actnv )
 
   // Construct derived type for output
   var out_pmodel = {
@@ -220,13 +281,13 @@ function lue_vpd_c3_full( kmm, gstar, ns_star, ca, vpd ){
   // vpd     : Pa, vapor pressure deficit
 
   // leaf-internal-to-ambient CO2 partial pressure (ci/ca) ratio
-  var xi  = Math.sqrt( ( params_gpp%beta * ( kmm + gstar ) ) / ( 1.6 * ns_star ) );     // see Eq. 2 in 'Estimation_of_beta.pdf'
+  var xi  = Math.sqrt( ( params_pft_gpp.beta * ( kmm + gstar ) ) / ( 1.6 * ns_star ) );     // see Eq. 2 in 'Estimation_of_beta.pdf'
   var chi = gstar / ca + ( 1.0 - gstar / ca ) * xi / ( xi + Math.sqrt(vpd) );           // see Eq. 1 in 'Estimation_of_beta.pdf'
 
   // Define variable substitutes:
   var vdcg = ca - gstar;
   var vacg = ca + 2.0 * gstar;
-  var vbkg = params_gpp%beta * (kmm + gstar);
+  var vbkg = params_pft_gpp.beta * (kmm + gstar);
 
   // Check for negatives:
   if (vbkg > 0) {
@@ -374,7 +435,7 @@ function calc_gstar( tc ){
   // conversion to temperature in Kelvin
   var tk = tc + 273.15;
 
-  gstar = gs25 * Math.exp( ( dha / kR ) * ( 1.0/298.15 - 1.0/tk ) );
+  var gstar = gs25 * Math.exp( ( dha / kR ) * ( 1.0/298.15 - 1.0/tk ) );
   
   return gstar;
 
@@ -422,7 +483,7 @@ function calc_patm( elv ){
   //-----------------------------------------------------------------------
   // argument
   // elv : elevation above sea level, m
-
+ 
   // local variables
   var kPo = 101325;   // standard atmosphere, Pa (Allen, 1973)
   var kTo = 298.15;   // base temperature, K (Prentice, unpublished)
@@ -509,6 +570,10 @@ function calc_viscosity_h2o( tc, patm ){
   // tc   : air temperature (tc), degrees C
   // patm : atmospheric pressure (patm), Pa
 
+  // print('----- in calc_viscosity_h2o() ------')
+  // print(tc,'tc')
+  // print(patm,'patm')
+
   // local variables
   var tk_ast  = 647.096;    // Kelvin
   var rho_ast = 322.0;      // kg/m**3
@@ -516,6 +581,7 @@ function calc_viscosity_h2o( tc, patm ){
 
   // Get the density of water, kg/m**3
   var rho = calc_density_h2o( tc, patm );
+  // print(rho,'rho')
 
   // Calculate dimensionless parameters:
   var tbar = (tc + 273.15)/tk_ast;
@@ -523,10 +589,12 @@ function calc_viscosity_h2o( tc, patm ){
   var tbar2 = Math.pow( tbar, 2);
   var tbar3 = Math.pow( tbar, 3);
   var rbar = rho/rho_ast;
+  // print(rbar,'rbar')
 
   // Calculate mu0 (Eq. 11 & Table 2, Huber et al., 2009):
   var mu0 = 1.67752 + 2.20462/tbar + 0.6366564/tbar2 - 0.241605/tbar3;
   mu0 = 1e2*tbarx/mu0;
+  // print(mu0,'mu0')
 
   // Create Table 3, Huber et al. (2009):
   var h_array = [
@@ -543,16 +611,20 @@ function calc_viscosity_h2o( tc, patm ){
   var mu1 = 0.0;
   var ctbar = (1.0/tbar) - 1.0;
 
-  for (i = 0; i < 6; i++) { 
-    // text += cars[i] + "<br>";
+  for (var i = 0; i < 6; i++) { 
     var coef1 = Math.pow(ctbar,i);
+    // print(i,'coef1:',coef1)
     var coef2 = 0.0;
-    for (i = 0; i < 7; i++) { 
-      coef2 += h_array(j,i) * Math.pow((rbar - 1.0),j);
+    for (var j = 0; j < 7; j++) { 
+      // print(j,i,'h_array[j][i]:',h_array[j][i])
+      coef2 += h_array[j][i] * Math.pow((rbar - 1.0),j);
+      // print(i,j,'coef2:',coef2)
     }
     mu1 += coef1 * coef2;
+    // print(i,'mu1:',mu1)
   }
   mu1 = Math.exp( rbar * mu1 );
+  // print(i, 'mu1', mu1)
 
   // Calculate mu_bar (Eq. 2, Huber et al., 2009)
   //   assumes mu2 = 1
@@ -561,11 +633,9 @@ function calc_viscosity_h2o( tc, patm ){
   // Calculate mu (Eq. 1, Huber et al., 2009)
   var viscosity_h2o = mu_bar * mu_ast;    // Pa s
 
-  return viscosity_h2o
+  // print('----- END calc_viscosity_h2o() ------')
+
+  return viscosity_h2o;
 
 }
-
-
-
-
 
