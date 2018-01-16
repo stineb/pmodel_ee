@@ -1,13 +1,14 @@
 
-//-----------------------------------------------------------------------
+//----------------------------------------------------------------------- 
 // Example values
-//-----------------------------------------------------------------------
-var co2   = 376.0
-var elv   = 450.0
+//----------------------------------------------------------------------- 
+var co2   = ee.Image(376.0)
+//var elv   = ee.Image(450.0)
+var elv   = ee.Image('CGIAR/SRTM90_V4')
 var mtemp = [0.4879904, 6.1999985, 7.4999870, 9.6999003, 13.1999913, 19.6999227, 18.6000030, 18.0999577, 13.8999807, 10.7000307, 7.2999217, 4.4999644]
 var mvpd  = [113.0432, 338.4469, 327.1185, 313.8799, 247.9747, 925.9489, 633.8551, 497.6772, 168.7784, 227.1889, 213.0142, 172.6035]
 var mppfd = [223.8286, 315.2295, 547.4822, 807.4035, 945.9020, 1194.1227, 1040.5228, 1058.4161, 814.2580, 408.5199, 268.9183, 191.4482]
-var fapar = 1.0
+var fapar = ee.Image(1.0)
 
 //-----------------------------------------------------------------------
 // Define PFT-specific parameters. Here for C3 plants.
@@ -41,6 +42,24 @@ var n_v = mol_weight_rubisco * n_conc_rubisco / ( cat_turnover_per_site * cat_si
 // Execute P-model with specified arguments
 //-----------------------------------------------------------------------
 var result = pmodel( mtemp[0], mvpd[0], co2, elv, mppfd[0], fapar, "C3_full" )
+print(result)
+
+var out_keys = result.keys();
+var out_model = ee.Image(0);
+
+  var i_key = out_keys.get(1)
+  var out_model = ee.Image(result.get(i_key));
+
+for (var ii = 1; ii < 19; ii++) { 
+  var i_key = out_keys.get(ii)
+  var imTemp = ee.Image(result.get(i_key));
+  var out_model = out_model.addBands(imTemp)
+ 
+}
+
+var out_model = out_model.rename(out_keys)
+
+Map.addLayer(out_model.select('gpp'), {min:5,max:12}, 'gpp')
 
 
 //-----------------------------------------------------------------------
@@ -48,8 +67,10 @@ var result = pmodel( mtemp[0], mvpd[0], co2, elv, mppfd[0], fapar, "C3_full" )
 //-----------------------------------------------------------------------
 function pmodel( tc, vpd, co2, elv, ppfd, fapar, method ) {
   
+  var tc = ee.Image(tc);
+  
   // absorbed photosynthetically active radiation (mol/m2)
-  var ppfdabs = fapar * ppfd;
+  var ppfdabs = fapar.multiply(ee.Image(ppfd));
   
   // atmospheric pressure as a function of elevation (Pa)
   var patm = calc_patm( elv );
@@ -67,10 +88,10 @@ function pmodel( tc, vpd, co2, elv, ppfd, fapar, method ) {
 
   // viscosity correction factor = viscosity( temp, press )/viscosity( 25 degC, 1013.25 Pa) 
   var ns      = calc_viscosity_h2o( tc, patm );  // Pa s 
-  var ns25    = calc_viscosity_h2o( kTo, kPo );  // Pa s 
-  var ns_star = ns / ns25;                       // (unitless)
-  // print(ns_star,'ns_star')
-
+  var ns25    = calc_viscosity_h2o( ee.Image(kTo), ee.Image(kPo) );  // Pa s 
+  var ns_star = ns.divide(ns25);                       // (unitless)
+ 
+  
   if (method=="approx"){
     //-----------------------------------------------------------------------
     // A. APPROXIMATIVE METHOD
@@ -97,6 +118,7 @@ function pmodel( tc, vpd, co2, elv, ppfd, fapar, method ) {
 
   }
 
+  
   // LUE-functions return m, n, and chi
   var chi = out_lue.chi;
 
@@ -110,69 +132,73 @@ function pmodel( tc, vpd, co2, elv, ppfd, fapar, method ) {
   // efficiency, the absorbed PAR, the function of alpha (drought-reduction),
   // and 'm'
   var mprime = calc_mprime( out_lue.m );
-
+  
   // Light use efficiency (assimilation rate per unit absorbed light)
-  var lue = params_pft_gpp.kphio * mprime ; // in mol CO2 m-2 s-1 / (mol light m-2 s-1)
-  // print( 'lue', lue )
+  var lue = ee.Image(params_pft_gpp.kphio).multiply(mprime) ; // in mol CO2 m-2 s-1 / (mol light m-2 s-1)
+  
 
   // Gross primary productivity = ecosystem-level assimilation rate (per unit ground area)
-  var assim = ppfdabs * lue; // in mol CO2 m-2 s-1
+  var assim = ppfdabs.multiply(lue); // in mol CO2 m-2 s-1
   
   // Leaf-level assimilation rate (per unit leaf area), representative for top-canopy leaves
-  var assim_unitfapar = ppfd * lue;  // in mol m-2 s-1
+  var assim_unitfapar = ee.Image(ppfd).multiply(lue);  // in mol m-2 s-1
 
   // leaf-internal CO2 partial pressure (Pa)
-  var ci = chi * ca;
-  // print( 'ci', ci )
+  var ci = chi.multiply(ca);
+ 
+  
 
   // stomatal conductance to H2O, expressed per unit absorbed light
-  var gs_unitiabs = 1.6 * lue * patm / ( ca - ci );
+  var gs_unitiabs = ee.Image(1.6).multiply(lue).multiply(patm).divide( ca.subtract(ci) );
+
 
   // Vcmax per unit ground area is the product of the intrinsic quantum 
   // efficiency, the absorbed PAR, and 'n'
-  var vcmax = ppfdabs * params_pft_gpp.kphio * out_lue.n;
+  var vcmax = ppfdabs.multiply(ee.Image(params_pft_gpp.kphio)).multiply(ee.Image(out_lue.n));
   // print( 'ppfdabs', ppfdabs )
   // print( 'params_pft_gpp.kphio', params_pft_gpp.kphio )
   // print( 'out_lue.n', out_lue.n )
   // print( 'vcmax', vcmax )
 
   // Vcmax normalised per unit fAPAR (assuming fAPAR=1)
-  var vcmax_unitfapar = ppfd * params_pft_gpp.kphio * out_lue.n;
+  var vcmax_unitfapar = ee.Image(ppfd).multiply(ee.Image(params_pft_gpp.kphio)).multiply(ee.Image(out_lue.n));
 
   // Vcmax normalised per unit absorbed PPFD (assuming ppfdabs=1)
-  var vcmax_unitiabs = params_pft_gpp.kphio * out_lue.n; 
+  var vcmax_unitiabs = ee.Image(params_pft_gpp.kphio).multiply(ee.Image(out_lue.n)); 
 
   // Vcmax25 (vcmax normalized to 25 deg C)
-  var factor25_vcmax    = calc_vcmax25( 1.0, tc );
-  var vcmax25           = factor25_vcmax * vcmax;
-  var vcmax25_unitfapar = factor25_vcmax * vcmax_unitfapar;
-  var vcmax25_unitiabs  = factor25_vcmax * vcmax_unitiabs;
+  var factor25_vcmax    = calc_vcmax25( ee.Image(1.0), tc );
+  
+  var vcmax25           = factor25_vcmax.multiply(vcmax);
+  var vcmax25_unitfapar = factor25_vcmax.multiply(vcmax_unitfapar);
+  var vcmax25_unitiabs  = factor25_vcmax.multiply(vcmax_unitiabs);
   // print( 'vcmax25', vcmax25 )
 
   // Dark respiration
-  var rd = params_pft_gpp.rd_to_vcmax * vcmax;
-  // print( 'rd', rd )
+  var rd = ee.Image(params_pft_gpp.rd_to_vcmax).multiply(vcmax);
+ 
 
+  
   // Dark respiration per unit fAPAR (assuming fAPAR=1)
-  var rd_unitfapar = params_pft_gpp.rd_to_vcmax * vcmax_unitfapar;
+  var rd_unitfapar = ee.Image(params_pft_gpp.rd_to_vcmax).multiply(vcmax_unitfapar);
 
   // Dark respiration per unit absorbed PPFD (assuming ppfdabs=1)
-  var rd_unitiabs = params_pft_gpp.rd_to_vcmax * vcmax_unitiabs;
+  var rd_unitiabs = ee.Image(params_pft_gpp.rd_to_vcmax).multiply(vcmax_unitiabs);
 
   // active metabolic leaf N (canopy-level), mol N/m2-ground (same equations as for nitrogen content per unit leaf area, gN/m2-leaf)
-  var actnv = vcmax25 * n_v;
-  var actnv_unitfapar = vcmax25_unitfapar * n_v;
-  var actnv_unitiabs  = vcmax25_unitiabs  * n_v;
-  // print( 'actnv', actnv )
+  var actnv = vcmax25.multiply(ee.Image(n_v));
+  var actnv_unitfapar = vcmax25_unitfapar.multiply(ee.Image(n_v));
+  var actnv_unitiabs  = vcmax25_unitiabs.multiply(ee.Image(n_v));
+  
 
   // Construct derived type for output
-  var out_pmodel = {
+  var out_pmodel = ee.Dictionary({
     gpp:             assim,
     gstar:           gstar,
     chi:             chi,
-    ci:              co2 * chi,  // return value 'ci:' is used for output in units of ppm. ,
+    ci:              co2.multiply(chi),  // return value 'ci:' is used for output in units of ppm. ,
     ca:              ca,
-    iwue:            ( ca - ci ) / ( 1.6 * patm ),
+    iwue:            ( ca.subtract(ci) ).divide( ee.Image(1.6).multiply(patm) ),
     gs_unitiabs:     gs_unitiabs,
     vcmax:           vcmax,
     vcmax25:         vcmax25,
@@ -186,7 +212,7 @@ function pmodel( tc, vpd, co2, elv, ppfd, fapar, method ) {
     actnv_unitfapar: actnv_unitfapar,
     actnv_unitiabs:  actnv_unitiabs,
     lue:             lue,
-  };
+  });
 
   return out_pmodel;
 }
@@ -209,14 +235,14 @@ function lue_approx( temp, vpd, elv, ca, gstar, ns_star, kmm ){
   // kmm        Pa, Michaelis-Menten coeff.
 
   // Wang-Han Equation:
-  var whe = Math.exp( 1.19 + 0.0545 * ( temp - 25.0 ) - 0.5 * Math.log( vpd ) - 8.15e-5 * elv );
+  var whe = (ee.Image(1.19).add( ee.Image(0.0545).multiply( temp.subtract(25.0) ) ).subtract( ee.Image(0.5).multiply(ee.Image(vpd).log()) ).subtract( ee.Image(8.15e-5).multiply(elv) ) ).exp();
 
   // leaf-internal-to-ambient CO2 partial pressure (ci/ca) ratio
-  var chi = whe / ( 1.0 + whe );
+  var chi = whe.divide( ee.Image(1.0).add(whe) );
 
   //  m
-  var gamma = gstar / ca;
-  var m = (chi - gamma) / (chi + 2 * gamma);
+  var gamma = gstar.divide(ca);
+  var m = (chi.subtract(gamma)).divide( chi.add(ee.Image(2).multiply(gamma)) );
 
   // return output object
   var out_lue = {
@@ -244,17 +270,17 @@ function lue_vpd_c3_simpl( kmm, gstar, ns_star, ca, vpd ){
   // vpd     : Pa, vapor pressure deficit
 
   // leaf-internal-to-ambient CO2 partial pressure (ci/ca) ratio
-  var xi  = Math.sqrt( params_gpp%beta * kmm / (1.6 * ns_star) );
-  var chi = xi / (xi + Math.sqrt(vpd));
+  var xi  = ( (params_gpp.mod(beta)).multiply(kmm).divide(ee.Image(1.6).multiply(ns_star)) ).sqrt();
+  var chi = xi.divide(xi.add( vpd.sqrt() ));
 
   // light use efficiency (m)
   // consistent with this, directly return light-use-efficiency (m)
-  var m = ( xi * (ca - gstar) - gstar * Math.sqrt( vpd ) ) / ( xi * (ca + 2.0 * gstar) + 2.0 * gstar * Math.sqrt( vpd ) );
+  var m = ( xi.multiply(ca.add(gstar)).subtract( gstar.multiply(vpd.sqrt()) ) ) .divide ( (xi.multiply(ca.add(ee.Image(2.0).multiply(gstar)))) .add (ee.Image(2.0).multiply(gstar).multiply(vpd.sqrt()) ));
 
   // n 
-  var gamma = gstar / ca;
-  var kappa = kmm / ca;
-  var n = (chi + kappa) / (chi + 2 * gamma);
+  var gamma = gstar.divide(ca);
+  var kappa = kmm.divide(ca);
+  var n = (chi.add(kappa)).divide(chi.add(ee.Image(2).multiply(gamma)));
 
   // return output object
   var out_lue = {
@@ -281,26 +307,25 @@ function lue_vpd_c3_full( kmm, gstar, ns_star, ca, vpd ){
   // vpd     : Pa, vapor pressure deficit
 
   // leaf-internal-to-ambient CO2 partial pressure (ci/ca) ratio
-  var xi  = Math.sqrt( ( params_pft_gpp.beta * ( kmm + gstar ) ) / ( 1.6 * ns_star ) );     // see Eq. 2 in 'Estimation_of_beta.pdf'
-  var chi = gstar / ca + ( 1.0 - gstar / ca ) * xi / ( xi + Math.sqrt(vpd) );           // see Eq. 1 in 'Estimation_of_beta.pdf'
+  var xi  = ( ( ee.Image(params_pft_gpp.beta).multiply( kmm.add(gstar) ) ).divide( ee.Image(1.6).multiply(ns_star) ) ).sqrt();     // see Eq. 2 in 'Estimation_of_beta.pdf'
+  var chi = (gstar.divide(ca)) .add( ( ee.Image(1.0).subtract((gstar).divide(ca) )) .multiply(xi) .divide ( (xi).add(ee.Image(vpd).sqrt()) ));           // see Eq. 1 in 'Estimation_of_beta.pdf'
 
+  
   // Define variable substitutes:
-  var vdcg = ca - gstar;
-  var vacg = ca + 2.0 * gstar;
-  var vbkg = params_pft_gpp.beta * (kmm + gstar);
-
+  var vdcg = ca.subtract(gstar);
+  var vacg = ca.add(ee.Image(2.0).multiply(gstar));
+  var vbkg = ee.Image(params_pft_gpp.beta).multiply(kmm.add(gstar));
   // Check for negatives:
-  if (vbkg > 0) {
-    vsr = Math.sqrt( 1.6 * ns_star * vpd / vbkg );
-    // Based on the m' formulation (see Regressing_LUE.pdf)
-    m = vdcg / ( vacg + 3.0 * gstar * vsr );
-  }
-
+  var vsr = ee.Image(0);
+  var m = ee.Image(0);
+  var vsr = vsr.where( vbkg.gt(0), ( ee.Image(1.6).multiply(ns_star).multiply(vpd).divide(vbkg) ).sqrt() )
+  var m = m.where( vbkg.gt(0), vdcg.divide( vacg.add(ee.Image(3.0).multiply(gstar).multiply(vsr) ) ) )  
+  
   // n 
-  var gamma = gstar / ca;
-  var kappa = kmm / ca;
-  var n = (chi + kappa) / (chi + 2 * gamma);
-
+  var gamma = gstar.divide(ca);
+  var kappa = kmm.divide(ca);
+  var n = (chi.add(kappa)).divide(chi.add(ee.Image(2).multiply(gamma)));
+  
   // return output object
   var out_lue = {
     chi : chi,
@@ -322,9 +347,9 @@ function lue_c4(){
 
   // return output object
   var out_lue = {
-    chi : -9999,
-    m : 1,
-    n : 1
+    chi : ee.Image(-9999),
+    m : ee.Image(1),
+    n : ee.Image(1)
   };
 
   return out_lue;
@@ -341,10 +366,11 @@ function calc_mprime( m ){
   var kc = 0.41;          // Jmax cost coefficient
 
   // square of m-prime (mpi)
-  var mprime = Math.pow( m, 2 ) - Math.pow( kc, 2.0/3.0) * Math.pow( m, 4.0/3.0);
+  var mprime = m.pow(2).subtract(ee.Image(kc).pow(2.0/3.0).multiply(m.pow(4.0/3.0)) );
+
 
   // Check for negatives and take root of square
-  if (mprime > 0) { mprime = Math.sqrt(mprime); }
+  var mprime = mprime.where(mprime.gt(0), mprime.sqrt())
 
   return mprime;
   
@@ -360,7 +386,7 @@ function co2_to_ca( co2, patm ){
   // co2  : ambient CO2 in units of ppm
   // patm : monthly atm. pressure, Pa
 
-  var ca = ( 1.e-6 ) * co2 * patm;         // Pa, atms. CO2
+  var ca = ee.Image(1.e-6).multiply(co2).multiply(patm);         // Pa, atms. CO2
     
   return ca;
 
@@ -402,12 +428,13 @@ function calc_k( tc, patm ){
   var dhao = 36380;      // J/mol
   var kR   = 8.3145;     // J/mol/K
   var kco  = 2.09476e5;  // ppm, US Standard Atmosphere
+  var constant2 = ee.Image(298.15).multiply(ee.Image(kR)).multiply((tc.add(ee.Image(273.15)))) ;
+  
+  var kc = ee.Image(kc25).multiply(( ee.Image(dhac).multiply(tc.subtract(ee.Image(25.0))).divide(constant2) ).exp());
+  var ko = ee.Image(ko25).multiply(( ee.Image(dhao).multiply(tc.subtract(ee.Image(25.0))).divide(constant2) ).exp());
 
-  var kc = kc25 * Math.exp( dhac * (tc - 25.0)/(298.15 * kR * (tc + 273.15)) );
-  var ko = ko25 * Math.exp( dhao * (tc - 25.0)/(298.15 * kR * (tc + 273.15)) );
-
-  var po = kco * (1e-6) * patm; // O2 partial pressure
-  var k  = kc * (1.0 + po/ko);
+  var po = ee.Image(kco).multiply(ee.Image(1e-6)).multiply(patm); // O2 partial pressure
+  var k  = kc.multiply( ee.Image(1.0).add(po.divide(ko)) );
 
   return k;
 
@@ -428,14 +455,14 @@ function calc_gstar( tc ){
   // tc  : air temperature (degrees C)
 
   // local variables
-  var gs25 = 4.220;    // Pa, assuming 25 deg C & 98.716 kPa)
-  var kR   = 8.3145;   // J/mol/K
-  var dha  = 37830;    // J/mol
+  var gs25 = ee.Image(4.220);    // Pa, assuming 25 deg C & 98.716 kPa)
+  var kR   = ee.Image(8.3145);   // J/mol/K
+  var dha  = ee.Image(37830);    // J/mol
 
   // conversion to temperature in Kelvin
-  var tk = tc + 273.15;
+  var tk = tc.add(ee.Image(273.15));
 
-  var gstar = gs25 * Math.exp( ( dha / kR ) * ( 1.0/298.15 - 1.0/tk ) );
+  var gstar = gs25.multiply(( dha.divide(kR) ).multiply(( ee.Image(1.0/298.15).subtract(ee.Image(1.0).divide(tk)))).exp());
   
   return gstar;
 
@@ -456,13 +483,13 @@ function calc_vcmax25( vcmax, tc ){
   // tc      // air temperature (degrees C)
 
   // loal variables
-  var dhav = 65330;    // J/mol
-  var kR   = 8.3145;   // J/mol/K
+  var dhav = ee.Image(65330);    // J/mol
+  var kR   = ee.Image(8.3145);   // J/mol/K
 
   // conversion to temperature in Kelvin
-  var tk = tc + 273.15;
+  var tk = tc.add(ee.Image(273.15));
 
-  var vcmax25 = vcmax * Math.exp( -dhav/kR * (1/298.15 - 1/tk) );
+  var vcmax25 = vcmax.multiply(( ee.Image(-1).multiply(dhav.divide(kR)).multiply( ee.Image(1/298.15).subtract(ee.Image(1).divide(tk)) ) ).exp());
 
   return vcmax25;
   
@@ -483,75 +510,34 @@ function calc_patm( elv ){
   //-----------------------------------------------------------------------
   // argument
   // elv : elevation above sea level, m
- 
-  // local variables
+    // local variables
   var kPo = 101325;   // standard atmosphere, Pa (Allen, 1973)
   var kTo = 298.15;   // base temperature, K (Prentice, unpublished)
   var kL = 0.0065;    // temperature lapse rate, K/m (Allen, 1973)
   var kG = 9.80665;   // gravitational acceleration, m/s**2 (Allen, 1973)
   var kR = 8.3145;    // universal gas constant, J/mol/K (Allen, 1973)
   var kMa = 0.028963; // molecular weight of dry air, kg/mol (Tsilingiris, 2008)
+  var constant1 = (kG*kMa/(kR*kL));
+ 
+  // local variables
+  var kPo = ee.Image(101325);   // standard atmosphere, Pa (Allen, 1973)
+  var kTo = ee.Image(298.15);   // base temperature, K (Prentice, unpublished)
+  var kL = ee.Image(0.0065);    // temperature lapse rate, K/m (Allen, 1973)
+  var kG = ee.Image(9.80665);   // gravitational acceleration, m/s**2 (Allen, 1973)
+  var kR = ee.Image(8.3145);    // universal gas constant, J/mol/K (Allen, 1973)
+  var kMa = ee.Image(0.028963); // molecular weight of dry air, kg/mol (Tsilingiris, 2008)
 
   // Convert elevation to pressure, Pa:
-  var patm = kPo*Math.pow((1.0 - kL*elv/kTo),(kG*kMa/(kR*kL)));
+  var patm = kPo.multiply(ee.Image(1.0).subtract(elv.divide(kTo).multiply(kL)).pow(constant1));
   
   return patm;
 
 }
 
 
-function calc_density_h2o( tc, patm ){
-  //-----------------------------------------------------------------------
-  // Features: Calculates density of water at a given temperature and 
-  //           pressure using the Tumlirz Equation
-  // Ref:      F.H. Fisher and O.E Dial, Jr. (1975) Equation of state of 
-  //           pure water and sea water, Tech. Rept., Marine Physical 
-  //           Laboratory, San Diego, CA.
-  // function return variable
-  // real :: density_h2o  // density of water, kg/m**3
-  //-----------------------------------------------------------------------
-  // arguments
-  // tc   : air temperature (tc), degrees C
-  // patm : atmospheric pressure (patm), Pa
 
-  // Calculate lambda, (bar cm**3)/g:
-  var my_lambda = 1788.316 +
-              21.55053*tc +
-            -0.4695911*tc*tc +
-         (3.096363e-3)*tc*tc*tc +
-    -1.0*(7.341182e-6)*tc*tc*tc*tc;
 
-  // Calculate po, bar
-  var po = 5918.499 + 
-              58.05267*tc + 
-            -1.1253317*tc*tc + 
-        (6.6123869e-3)*tc*tc*tc + 
-   -1.0*(1.4661625e-5)*tc*tc*tc*tc;
 
-  // Calculate vinf, cm**3/g
-  var vinf = 0.6980547 +
-    -1.0*(7.435626e-4)*tc +
-         (3.704258e-5)*tc*tc +
-    -1.0*(6.315724e-7)*tc*tc*tc +
-         (9.829576e-9)*tc*tc*tc*tc +
-   -1.0*(1.197269e-10)*tc*tc*tc*tc*tc +
-        (1.005461e-12)*tc*tc*tc*tc*tc*tc +
-   -1.0*(5.437898e-15)*tc*tc*tc*tc*tc*tc*tc +
-         (1.69946e-17)*tc*tc*tc*tc*tc*tc*tc*tc +
-   -1.0*(2.295063e-20)*tc*tc*tc*tc*tc*tc*tc*tc*tc;
-
-  // Convert pressure to bars (1 bar = 100000 Pa)
-  var pbar = (1e-5)*patm;
-  
-  // Calculate the specific volume (cm**3 g**-1):
-  var vau = vinf + my_lambda/(po + pbar);
-
-  // Convert to density (g cm**-3) -> 1000 g/kg; 1000000 cm**3/m**3 -> kg/m**3:
-  var density_h2o = (1e3/vau);
-
-  return density_h2o;
-
-}
 
 
 function calc_viscosity_h2o( tc, patm ){
@@ -575,25 +561,24 @@ function calc_viscosity_h2o( tc, patm ){
   // print(patm,'patm')
 
   // local variables
-  var tk_ast  = 647.096;    // Kelvin
-  var rho_ast = 322.0;      // kg/m**3
-  var mu_ast  = 1e-6;       // Pa s
+  var tk_ast  = ee.Image(647.096);    // Kelvin
+  var rho_ast = ee.Image(322.0);      // kg/m**3
+  var mu_ast  = ee.Image(1e-6);       // Pa s
 
   // Get the density of water, kg/m**3
   var rho = calc_density_h2o( tc, patm );
-  // print(rho,'rho')
 
   // Calculate dimensionless parameters:
-  var tbar = (tc + 273.15)/tk_ast;
-  var tbarx = Math.pow( tbar, 0.5);
-  var tbar2 = Math.pow( tbar, 2);
-  var tbar3 = Math.pow( tbar, 3);
-  var rbar = rho/rho_ast;
+  var tbar = ( tc.add(ee.Image(273.15)) ).divide(tk_ast);
+  var tbarx = tbar.pow(0.5);
+  var tbar2 = tbar.pow(2);
+  var tbar3 = tbar.pow(3);
+  var rbar = rho.divide(rho_ast);
   // print(rbar,'rbar')
 
   // Calculate mu0 (Eq. 11 & Table 2, Huber et al., 2009):
-  var mu0 = 1.67752 + 2.20462/tbar + 0.6366564/tbar2 - 0.241605/tbar3;
-  mu0 = 1e2*tbarx/mu0;
+  var mu0 = ee.Image(1.67752).add( ee.Image(2.20462).divide(tbar) ).add( ee.Image(0.6366564).divide(tbar2) ).subtract( ee.Image(0.241605).divide(tbar3) );
+  var mu0 = ee.Image(1e2).multiply(tbarx).divide(mu0);
   // print(mu0,'mu0')
 
   // Create Table 3, Huber et al. (2009):
@@ -608,30 +593,30 @@ function calc_viscosity_h2o( tc, patm ){
                 ];
 
   // Calculate mu1 (Eq. 12 & Table 3, Huber et al., 2009):
-  var mu1 = 0.0;
-  var ctbar = (1.0/tbar) - 1.0;
+  var mu1 = ee.Image(0.0);
+  var ctbar = (ee.Image(1.0).divide(tbar)).subtract(ee.Image(1.0));
 
   for (var i = 0; i < 6; i++) { 
-    var coef1 = Math.pow(ctbar,i);
+    var coef1 = ctbar.pow(ee.Image(i));
     // print(i,'coef1:',coef1)
-    var coef2 = 0.0;
+    var coef2 = ee.Image(0.0);
     for (var j = 0; j < 7; j++) { 
       // print(j,i,'h_array[j][i]:',h_array[j][i])
-      coef2 += h_array[j][i] * Math.pow((rbar - 1.0),j);
+      coef2 = coef2.add( ee.Image(h_array[j][i]).multiply((rbar.subtract(ee.Image(1.0))).pow(j)) );
       // print(i,j,'coef2:',coef2)
     }
-    mu1 += coef1 * coef2;
+    mu1 = mu1.add(coef1.multiply(coef2));
     // print(i,'mu1:',mu1)
   }
-  mu1 = Math.exp( rbar * mu1 );
+  mu1 = ( rbar.multiply(mu1) ).exp();
   // print(i, 'mu1', mu1)
 
   // Calculate mu_bar (Eq. 2, Huber et al., 2009)
   //   assumes mu2 = 1
-  var mu_bar = mu0 * mu1;
+  var mu_bar = mu0.multiply(mu1);
 
   // Calculate mu (Eq. 1, Huber et al., 2009)
-  var viscosity_h2o = mu_bar * mu_ast;    // Pa s
+  var viscosity_h2o = mu_bar.multiply(mu_ast);    // Pa s
 
   // print('----- END calc_viscosity_h2o() ------')
 
@@ -639,3 +624,57 @@ function calc_viscosity_h2o( tc, patm ){
 
 }
 
+
+
+function calc_density_h2o( tc, patm ){
+  //-----------------------------------------------------------------------
+  // Features: Calculates density of water at a given temperature and 
+  //           pressure using the Tumlirz Equation
+  // Ref:      F.H. Fisher and O.E Dial, Jr. (1975) Equation of state of 
+  //           pure water and sea water, Tech. Rept., Marine Physical 
+  //           Laboratory, San Diego, CA.
+  // function return variable
+  // real :: density_h2o  // density of water, kg/m**3
+  //-----------------------------------------------------------------------
+  // arguments
+  // tc   : air temperature (tc), degrees C
+  // patm : atmospheric pressure (patm), Pa
+
+  // Calculate lambda, (bar cm**3)/g:
+  var my_lambda = ee.Image(1788.316) .add(
+               ee.Image(21.55053).multiply(tc) ).add(
+             ee.Image(-0.4695911).multiply(tc).multiply(tc) ).add(
+          ee.Image((3.096363e-3)).multiply(tc).multiply(tc).multiply(tc) ).add(
+     ee.Image(-1.0*(7.341182e-6)).multiply(tc).multiply(tc).multiply(tc).multiply(tc) );
+
+  // Calculate po, bar
+  var po = ee.Image(5918.499) .add( 
+              ee.Image(58.05267).multiply(tc) ).add( 
+            ee.Image(-1.1253317).multiply(tc).multiply(tc) ).add(
+        ee.Image((6.6123869e-3)).multiply(tc).multiply(tc).multiply(tc) ).add(
+   ee.Image(-1.0*(1.4661625e-5)).multiply(tc).multiply(tc).multiply(tc).multiply(tc) );
+
+  // Calculate vinf, cm**3/g
+  var vinf = ee.Image(0.6980547) .add(
+    ee.Image(-1.0*(7.435626e-4)).multiply(tc) ).add(
+        ee.Image( (3.704258e-5)).multiply(tc).multiply(tc) ).add(
+    ee.Image(-1.0*(6.315724e-7)).multiply(tc).multiply(tc).multiply(tc) ).add(
+         ee.Image((9.829576e-9)).multiply(tc).multiply(tc).multiply(tc).multiply(tc) ).add(
+   ee.Image(-1.0*(1.197269e-10)).multiply(tc).multiply(tc).multiply(tc).multiply(tc).multiply(tc) ).add(
+        ee.Image((1.005461e-12)).multiply(tc).multiply(tc).multiply(tc).multiply(tc).multiply(tc).multiply(tc) ).add(
+   ee.Image(-1.0*(5.437898e-15)).multiply(tc).multiply(tc).multiply(tc).multiply(tc).multiply(tc).multiply(tc).multiply(tc) ).add(
+        ee.Image( (1.69946e-17)).multiply(tc).multiply(tc).multiply(tc).multiply(tc).multiply(tc).multiply(tc).multiply(tc).multiply(tc) ).add(
+   ee.Image(-1.0*(2.295063e-20)).multiply(tc).multiply(tc).multiply(tc).multiply(tc).multiply(tc).multiply(tc).multiply(tc).multiply(tc).multiply(tc) );
+
+  // Convert pressure to bars (1 bar = 100000 Pa)
+  var pbar = ee.Image(1e-5).multiply(patm);
+  
+  // Calculate the specific volume (cm**3 g**-1):
+  var vau = vinf.add(my_lambda.divide((po.add(pbar))));
+
+  // Convert to density (g cm**-3) -> 1000 g/kg; 1000000 cm**3/m**3 -> kg/m**3:
+  var density_h2o = ee.Image(1e3).divide(vau);
+
+  return density_h2o;
+
+}
